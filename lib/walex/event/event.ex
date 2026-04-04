@@ -46,6 +46,7 @@ defmodule WalEx.Event do
           schema: schema,
           table: table,
           columns: columns,
+          source: source,
           record: record,
           commit_timestamp: timestamp,
           lsn: lsn
@@ -55,7 +56,7 @@ defmodule WalEx.Event do
     %Event{
       name: String.to_atom(table),
       type: :insert,
-      source: cast_source(app_name, schema, table, columns),
+      source: resolve_source(source, app_name, schema, table, columns),
       new_record: record,
       timestamp: timestamp,
       lsn: lsn
@@ -68,6 +69,7 @@ defmodule WalEx.Event do
           schema: schema,
           table: table,
           columns: columns,
+          source: source,
           record: record,
           old_record: old_record,
           commit_timestamp: timestamp,
@@ -78,7 +80,7 @@ defmodule WalEx.Event do
     %Event{
       name: String.to_atom(table),
       type: :update,
-      source: cast_source(app_name, schema, table, columns),
+      source: resolve_source(source, app_name, schema, table, columns),
       new_record: record,
       changes: map_changes(old_record, record),
       timestamp: timestamp,
@@ -92,6 +94,7 @@ defmodule WalEx.Event do
           schema: schema,
           table: table,
           columns: columns,
+          source: source,
           old_record: old_record,
           commit_timestamp: timestamp,
           lsn: lsn
@@ -101,7 +104,7 @@ defmodule WalEx.Event do
     %Event{
       name: String.to_atom(table),
       type: :delete,
-      source: cast_source(app_name, schema, table, columns),
+      source: resolve_source(source, app_name, schema, table, columns),
       old_record: old_record,
       timestamp: timestamp,
       lsn: lsn
@@ -110,7 +113,10 @@ defmodule WalEx.Event do
 
   def cast(_event, _event_name), do: nil
 
-  defp cast_source(app_name, schema, table, columns) do
+  defp resolve_source(source, _app_name, _schema, _table, _columns) when not is_nil(source),
+    do: source
+
+  defp resolve_source(_source, app_name, schema, table, columns) do
     %WalEx.Event.Source{
       name: Helpers.get_source_name(),
       version: Helpers.get_source_version(),

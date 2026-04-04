@@ -4,8 +4,9 @@ defmodule WalEx.Replication.Publisher do
   """
   use GenServer
 
-  alias WalEx.{Changes, Config, Events}
+  alias WalEx.{Changes, Config, Events, Helpers}
   alias WalEx.Decoder.Messages
+  import WalEx.TransactionFilter, only: [map_columns: 1]
 
   defmodule(State,
     do:
@@ -80,6 +81,31 @@ defmodule WalEx.Replication.Publisher do
     %{state | types: Map.put(state.types, msg.id, msg.name)}
   end
 
+  defp process_message(%{message: %Messages.Relation{} = msg, app_name: app_name}, state) do
+    updated_columns =
+      Enum.map(msg.columns, fn message ->
+        if Map.has_key?(state.types, message.type) do
+          %{message | type: state.types[message.type]}
+        else
+          message
+        end
+      end)
+
+    source = %WalEx.Event.Source{
+      name: Helpers.get_source_name(),
+      version: Helpers.get_source_version(),
+      db: Config.get_database(app_name),
+      schema: msg.namespace,
+      table: msg.name,
+      columns: map_columns(updated_columns)
+    }
+
+    updated_relations = %{msg | columns: updated_columns}
+    relation_with_source = Map.put(updated_relations, :source, source)
+    %{state | relations: Map.put(state.relations, msg.id, relation_with_source)}
+  end
+
+  # Relation messages without app_name (e.g. from process_message_sync in benchmarks)
   defp process_message(%{message: %Messages.Relation{} = msg}, state) do
     updated_columns =
       Enum.map(msg.columns, fn message ->
@@ -91,7 +117,8 @@ defmodule WalEx.Replication.Publisher do
       end)
 
     updated_relations = %{msg | columns: updated_columns}
-    %{state | relations: Map.put(state.relations, msg.id, updated_relations)}
+    relation_with_source = Map.put(updated_relations, :source, nil)
+    %{state | relations: Map.put(state.relations, msg.id, relation_with_source)}
   end
 
   defp process_message(
@@ -103,7 +130,8 @@ defmodule WalEx.Replication.Publisher do
        )
        when is_map(relations) do
     case Map.fetch(relations, relation_id) do
-      {:ok, %{columns: columns, namespace: namespace, name: name}} when is_list(columns) ->
+      {:ok, %{columns: columns, namespace: namespace, name: name, source: source}}
+      when is_list(columns) ->
         data = data_tuple_to_map(columns, tuple_data)
 
         new_record = %Changes.NewRecord{
@@ -111,6 +139,7 @@ defmodule WalEx.Replication.Publisher do
           schema: namespace,
           table: name,
           columns: columns,
+          source: source,
           record: data,
           commit_timestamp: commit_timestamp,
           lsn: lsn
@@ -141,7 +170,8 @@ defmodule WalEx.Replication.Publisher do
        )
        when is_map(relations) do
     case Map.fetch(relations, relation_id) do
-      {:ok, %{columns: columns, namespace: namespace, name: name}} when is_list(columns) ->
+      {:ok, %{columns: columns, namespace: namespace, name: name, source: source}}
+      when is_list(columns) ->
         old_data = data_tuple_to_map(columns, old_tuple_data)
         data = data_tuple_to_map(columns, tuple_data)
 
@@ -150,6 +180,7 @@ defmodule WalEx.Replication.Publisher do
           schema: namespace,
           table: name,
           columns: columns,
+          source: source,
           old_record: old_data,
           record: data,
           commit_timestamp: commit_timestamp,
@@ -181,7 +212,8 @@ defmodule WalEx.Replication.Publisher do
        )
        when is_map(relations) do
     case Map.fetch(relations, relation_id) do
-      {:ok, %{columns: columns, namespace: namespace, name: name}} when is_list(columns) ->
+      {:ok, %{columns: columns, namespace: namespace, name: name, source: source}}
+      when is_list(columns) ->
         data = data_tuple_to_map(columns, old_tuple_data || changed_key_tuple_data)
 
         deleted_record = %Changes.DeletedRecord{
@@ -189,6 +221,7 @@ defmodule WalEx.Replication.Publisher do
           schema: namespace,
           table: name,
           columns: columns,
+          source: source,
           old_record: data,
           commit_timestamp: commit_timestamp,
           lsn: lsn
